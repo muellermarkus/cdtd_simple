@@ -1,5 +1,11 @@
 # Continuous Diffusion for Mixed-Type Tabular Data
 
+<p align="center">
+  <a href="https://arxiv.org/abs/2312.10431">
+    <img alt="Paper URL" src="https://img.shields.io/badge/cs.LG-2312.10431-B31B1B.svg">
+  </a>
+</p>
+
 ![Banner](https://github.com/muellermarkus/cdtd_simple/blob/main/images/cdtd_overview.png)
 
 
