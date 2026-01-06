@@ -27,11 +27,7 @@ Full Replication Code: https://github.com/muellermarkus/cdtd
 
 ## Install Instructions
 
-Initialize virtual environment in Python 3.10, e.g., `python3.10 -m venv .venv` on Linux.
-
-Activate environment via `source .venv/bin/activate` (on Linux).
-
-Install packages via `pip install -r requirements.txt`.
+Run `uv sync`.
 
 
 ## Citation
