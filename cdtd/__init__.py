@@ -35,7 +35,7 @@ class MixedTypeDiffusion(nn.Module):
         timewarp_type="bytype",
         timewarp_weight_low_noise=1.0,
     ):
-        super(MixedTypeDiffusion, self).__init__()
+        super().__init__()
 
         self.dim = dim
         self.num_features = num_features
@@ -45,7 +45,7 @@ class MixedTypeDiffusion(nn.Module):
         self.categories = categories
         self.model = model
 
-        self.cat_emb = CatEmbedding(dim, categories, cat_emb_init_sigma, bias=True)
+        self.cat_enc = CatEmbedding(dim, categories, cat_emb_init_sigma, bias=True)
         self.register_buffer("sigma_data_cat", torch.tensor(sigma_data_cat))
         self.register_buffer("sigma_data_cont", torch.tensor(sigma_data_cont))
 
@@ -101,10 +101,7 @@ class MixedTypeDiffusion(nn.Module):
 
         # cross entropy over categorical features for each individual
         ce_losses = torch.stack(
-            [
-                F.cross_entropy(cat_logits[i], x_cat_0[:, i], reduction="none")
-                for i in range(self.num_cat_features)
-            ],
+            [F.cross_entropy(cat_logits[i], x_cat_0[:, i], reduction="none") for i in range(self.num_cat_features)],
             dim=1,
         )
 
@@ -117,9 +114,7 @@ class MixedTypeDiffusion(nn.Module):
         sigma_cat = sigma[:, : self.num_cat_features]
         sigma_cont = sigma[:, self.num_cat_features :]
 
-        x_cat_emb_t = x_cat_emb_0 + torch.randn_like(x_cat_emb_0) * sigma_cat.unsqueeze(
-            2
-        )
+        x_cat_emb_t = x_cat_emb_0 + torch.randn_like(x_cat_emb_0) * sigma_cat.unsqueeze(2)
         x_cont_t = x_cont_0 + torch.randn_like(x_cont_0) * sigma_cont
 
         return x_cat_emb_t, x_cont_t
@@ -128,7 +123,7 @@ class MixedTypeDiffusion(nn.Module):
         batch = x_cat.shape[0] if x_cat is not None else x_cont.shape[0]
 
         # get ground truth data
-        x_cat_emb_0 = self.cat_emb(x_cat)
+        x_cat_emb_0 = self.cat_enc(x_cat)
         x_cont_0 = x_cont
         x_cat_0 = x_cat
 
@@ -142,39 +137,23 @@ class MixedTypeDiffusion(nn.Module):
 
         x_cat_emb_t, x_cont_t = self.add_noise(x_cat_emb_0, x_cont_0, sigma)
         cat_logits, cont_preds = self.precondition(x_cat_emb_t, x_cont_t, u, sigma)
-        ce_losses, mse_losses = self.diffusion_loss(
-            x_cat_0, x_cont_0, cat_logits, cont_preds
-        )
+        ce_losses, mse_losses = self.diffusion_loss(x_cat_0, x_cont_0, cat_logits, cont_preds)
 
         # compute EDM weight
         sigma_cont = sigma[:, self.num_cat_features :]
-        cont_weight = (sigma_cont**2 + self.sigma_data_cont**2) / (
-            (sigma_cont * self.sigma_data_cont) ** 2 + 1e-7
-        )
+        cont_weight = (sigma_cont**2 + self.sigma_data_cont**2) / ((sigma_cont * self.sigma_data_cont) ** 2 + 1e-7)
 
         losses = {}
         losses["unweighted"] = torch.cat((ce_losses, mse_losses), dim=1)
         losses["unweighted_calibrated"] = losses["unweighted"] / self.normal_const
-        weighted_calibrated = (
-            torch.cat((ce_losses, cont_weight * mse_losses), dim=1) / self.normal_const
-        )
+        weighted_calibrated = torch.cat((ce_losses, cont_weight * mse_losses), dim=1) / self.normal_const
         c_noise = torch.log(u.to(torch.float32) + 1e-8) * 0.25
         time_reweight = self.weight_network(c_noise).unsqueeze(1)
 
-        losses["timewarping"] = self.timewarp_cdf.loss_fn(
-            sigma.detach(), losses["unweighted_calibrated"].detach()
-        )
-        weightnet_loss = (
-            time_reweight.exp() - weighted_calibrated.detach().mean(1)
-        ) ** 2
-        losses["weighted_calibrated"] = (
-            weighted_calibrated / time_reweight.exp().detach()
-        )
-        train_loss = (
-            losses["weighted_calibrated"].mean()
-            + losses["timewarping"].mean()
-            + weightnet_loss.mean()
-        )
+        losses["timewarping"] = self.timewarp_cdf.loss_fn(sigma.detach(), losses["unweighted_calibrated"].detach())
+        weightnet_loss = (time_reweight.exp() - weighted_calibrated.detach().mean(1)) ** 2
+        losses["weighted_calibrated"] = weighted_calibrated / time_reweight.exp().detach()
+        train_loss = losses["weighted_calibrated"].mean() + losses["timewarping"].mean() + weightnet_loss.mean()
 
         losses["train_loss"] = train_loss
 
@@ -189,9 +168,7 @@ class MixedTypeDiffusion(nn.Module):
         sigma_cat = sigma[:, : self.num_cat_features]
         sigma_cont = sigma[:, self.num_cat_features :]
 
-        c_in_cat = (
-            1 / (self.sigma_data_cat**2 + sigma_cat.unsqueeze(2) ** 2).sqrt()
-        )  # batch, num_features, 1
+        c_in_cat = 1 / (self.sigma_data_cat**2 + sigma_cat.unsqueeze(2) ** 2).sqrt()  # batch, num_features, 1
         c_in_cont = 1 / (self.sigma_data_cont**2 + sigma_cont**2).sqrt()
         # c_noise = u.log() / 4
         c_noise = torch.log(u + 1e-8) * 0.25 * 1000
@@ -207,11 +184,7 @@ class MixedTypeDiffusion(nn.Module):
 
         # apply preconditioning to continuous features
         c_skip = self.sigma_data_cont**2 / (sigma_cont**2 + self.sigma_data_cont**2)
-        c_out = (
-            sigma_cont
-            * self.sigma_data_cont
-            / (sigma_cont**2 + self.sigma_data_cont**2).sqrt()
-        )
+        c_out = sigma_cont * self.sigma_data_cont / (sigma_cont**2 + self.sigma_data_cont**2).sqrt()
         D_x = c_skip * x_cont_t + c_out * cont_preds
 
         return cat_logits, D_x
@@ -219,41 +192,26 @@ class MixedTypeDiffusion(nn.Module):
     def score_interpolation(self, x_cat_emb_t, cat_logits, sigma, return_probs=False):
         if return_probs:
             # transform logits for categorical features to probabilities
-            probs = []
-            for logits in cat_logits:
-                probs.append(F.softmax(logits.to(torch.float64), dim=1))
+            probs = [F.softmax(logits.to(torch.float64), dim=1) for logits in cat_logits]
             return probs
 
-        def interpolate_emb(i):
-            p = F.softmax(cat_logits[i].to(torch.float64), dim=1)
-            true_emb = self.cat_emb.get_all_feat_emb(i).to(torch.float64)
-            return torch.matmul(p, true_emb)
-
-        # take prob-weighted average of normalized ground truth embeddings
-        x_cat_emb_0_hat = torch.zeros_like(
-            x_cat_emb_t, device=self.device, dtype=torch.float64
-        )
-        for i in range(self.num_cat_features):
-            x_cat_emb_0_hat[:, i, :] = interpolate_emb(i)
+        x_emb_hat = torch.zeros_like(x_cat_emb_t, device=self.device, dtype=torch.float64)
+        for i, logits in enumerate(cat_logits):
+            probs = F.softmax(logits.to(torch.float64), dim=1)
+            x_emb_hat[:, i, :] = torch.matmul(probs, self.cached_emb[i])
 
         # plug interpolated embedding into score function to interpolate score
         sigma_cat = sigma[:, : self.num_cat_features]
-        interpolated_score = (x_cat_emb_t - x_cat_emb_0_hat) / sigma_cat.unsqueeze(2)
+        interpolated_score = (x_cat_emb_t - x_emb_hat) / sigma_cat.unsqueeze(2)
 
-        return interpolated_score, x_cat_emb_0_hat
+        return interpolated_score, x_emb_hat
 
     @torch.inference_mode()
     def sampler(self, cat_latents, cont_latents, num_steps=200):
-        B = (
-            cont_latents.shape[0]
-            if self.num_cont_features > 0
-            else cat_latents.shape[0]
-        )
+        B = cont_latents.shape[0] if self.num_cont_features > 0 else cat_latents.shape[0]
 
         # construct time steps
-        u_steps = torch.linspace(
-            1, 0, num_steps + 1, device=self.device, dtype=torch.float64
-        )
+        u_steps = torch.linspace(1, 0, num_steps + 1, device=self.device, dtype=torch.float64)
         t_steps = self.timewarp_cdf(u_steps, invert=True)
 
         assert torch.allclose(t_steps[0].to(torch.float32), self.sigma_max.float())
@@ -266,9 +224,7 @@ class MixedTypeDiffusion(nn.Module):
         x_cat_next = cat_latents.to(torch.float64) * t_cat_next.unsqueeze(1)
         x_cont_next = cont_latents.to(torch.float64) * t_cont_next
 
-        for i, (t_cur, t_next, u_cur) in enumerate(
-            zip(t_steps[:-1], t_steps[1:], u_steps[:-1])
-        ):
+        for i, (t_cur, t_next, u_cur) in enumerate(zip(t_steps[:-1], t_steps[1:], u_steps[:-1])):
             t_cur = t_cur.repeat((B, 1))
             t_next = t_next.repeat((B, 1))
             t_cont_cur = t_cur[:, self.num_cat_features :]
@@ -287,9 +243,7 @@ class MixedTypeDiffusion(nn.Module):
 
             # adjust data samples
             h = t_next - t_cur
-            x_cat_next = (
-                x_cat_next + h[:, : self.num_cat_features].unsqueeze(2) * d_cat_cur
-            )
+            x_cat_next = x_cat_next + h[:, : self.num_cat_features].unsqueeze(2) * d_cat_cur
             x_cont_next = x_cont_next + h[:, self.num_cat_features :] * d_cont_cur
 
         # final prediction of classes for categorical feature
@@ -304,9 +258,7 @@ class MixedTypeDiffusion(nn.Module):
         )
 
         # get probabilities for each category and derive generated classes
-        probs = self.score_interpolation(
-            x_cat_next, cat_logits, t_final, return_probs=True
-        )
+        probs = self.score_interpolation(x_cat_next, cat_logits, t_final, return_probs=True)
         x_cat_gen = torch.empty(B, self.num_cat_features, device=self.device)
         for i in range(self.num_cat_features):
             x_cat_gen[:, i] = probs[i].argmax(1)
@@ -407,13 +359,9 @@ class CDTD:
         self.diff_model = self.diff_model.to(self.device)
         self.diff_model.train()
 
-        self.ema_diff_model = ExponentialMovingAverage(
-            self.diff_model.parameters(), decay=ema_decay
-        )
+        self.ema_diff_model = ExponentialMovingAverage(self.diff_model.parameters(), decay=ema_decay)
 
-        self.optimizer = torch.optim.AdamW(
-            self.diff_model.parameters(), lr=lr, weight_decay=0
-        )
+        self.optimizer = torch.optim.AdamW(self.diff_model.parameters(), lr=lr, weight_decay=0)
         self.scheduler = LinearScheduler(
             num_steps_train,
             base_lr=lr,
@@ -435,10 +383,7 @@ class CDTD:
                 self.optimizer.zero_grad()
 
                 inputs = next(train_iter)
-                x_cat, x_cont = (
-                    input.to(self.device) if input is not None else None
-                    for input in inputs
-                )
+                x_cat, x_cont = (input.to(self.device) if input is not None else None for input in inputs)
 
                 losses, _ = self.diff_model.loss_fn(x_cat, x_cont, None)
                 losses["train_loss"].backward()
@@ -454,9 +399,7 @@ class CDTD:
                 pbar.update(1)
 
                 if self.current_step % log_steps == 0:
-                    pbar.set_description(
-                        f"Loss (last {log_steps} steps): {(sum_loss / n_obs):.3f}"
-                    )
+                    pbar.set_description(f"Loss (last {log_steps} steps): {(sum_loss / n_obs):.3f}")
                     n_obs = sum_loss = 0
 
                 # anneal learning rate
@@ -474,14 +417,34 @@ class CDTD:
 
         return self.diff_model
 
+    def init_score_interpolation(self):
+        # copy data to embedding bag
+        full_emb = self.diff_model.cat_enc.cat_emb.weight.data.detach()
+
+        # add bias to embedding bag
+        if self.diff_model.cat_enc.bias:
+            bias = [
+                self.diff_model.cat_enc.cat_bias[i].unsqueeze(0).expand(self.categories[i], -1)
+                for i in range(self.num_cat_features)
+            ]
+            bias = torch.row_stack(bias)
+
+        assert bias.shape == full_emb.shape
+        full_emb = full_emb + bias
+
+        # before running score interpolation, normalize embedding bag weights once
+        full_emb = F.normalize(full_emb, dim=1, eps=1e-20) * torch.tensor(self.cat_emb_dim).sqrt()
+        full_emb = full_emb.to(torch.float64)
+
+        self.diff_model.cached_emb = torch.split(full_emb, self.categories, dim=0)
+
     def sample(self, num_samples, num_steps=200, batch_size=4096, seed=42):
+        # cache normalized embeddings
+        self.init_score_interpolation()
+
         set_seeds(seed, cuda_deterministic=True)
         n_batches, remainder = divmod(num_samples, batch_size)
-        sample_sizes = (
-            n_batches * [batch_size] + [remainder]
-            if remainder != 0
-            else n_batches * [batch_size]
-        )
+        sample_sizes = n_batches * [batch_size] + [remainder] if remainder != 0 else n_batches * [batch_size]
 
         x_cat_list = []
         x_cont_list = []
@@ -491,12 +454,8 @@ class CDTD:
                 (num_samples, self.num_cat_features, self.cat_emb_dim),
                 device=self.device,
             )
-            cont_latents = torch.randn(
-                (num_samples, self.num_cont_features), device=self.device
-            )
-            x_cat_gen, x_cont_gen = self.diff_model.sampler(
-                cat_latents, cont_latents, num_steps
-            )
+            cont_latents = torch.randn((num_samples, self.num_cont_features), device=self.device)
+            x_cat_gen, x_cont_gen = self.diff_model.sampler(cat_latents, cont_latents, num_steps)
             x_cat_list.append(x_cat_gen)
             x_cont_list.append(x_cont_gen)
 

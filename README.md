@@ -6,6 +6,12 @@
   </a>
 </p>
 
+
+## Changelog
+- improved sampling efficiency by caching all normalized embeddings once before generation
+- switched to `uv` for easier replication of environment (use `uv sync` to install required packages)
+
+
 ![Banner](https://github.com/muellermarkus/cdtd_simple/blob/main/images/cdtd_overview.png)
 
 
